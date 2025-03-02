@@ -37,9 +37,7 @@ def rotate_chain(z):
     results.append(z)
     for i in range(n_steps):
         z_x = results[-1][:, :, :3]
-        # print(z_x.size(), Q.size())
         new_x = torch.matmul(z_x.view(-1, 3), Q.T).view(1, -1, 3)
-        # print(new_x.size())
         new_z = torch.cat([new_x, z_h], dim=2)
         results.append(new_z)
 
@@ -54,13 +52,17 @@ def reverse_tensor(x):
 def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
     n_samples = 1
     if args.dataset == 'qm9' or args.dataset == 'qm9_second_half' or args.dataset == 'qm9_first_half':
-        n_nodes = 19
+        # NOTE: LEO - changed to allow for a fixed number of atoms
+        if args.filter_n_atoms is None:
+            n_nodes = 19
+        else:
+            n_nodes = args.filter_n_atoms
     elif args.dataset == 'geom':
         n_nodes = 44
     else:
         raise ValueError()
 
-    # TODO FIX: This conditioning just zeros.
+    # TODO FIX: This conditioning just zeros. See elsewhere for conditional sampling
     if args.context_node_nf > 0:
         context = prop_dist.sample(n_nodes).unsqueeze(1).unsqueeze(0)
         context = context.repeat(1, n_nodes, 1).to(device)
@@ -68,7 +70,7 @@ def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
     else:
         context = None
 
-    node_mask = torch.ones(n_samples, n_nodes, 1).to(device)
+    node_mask = torch.ones(n_samples, n_nodes, 1).to(device)  # NOTE: why is this fixed - not suitble for filtered datasets
 
     edge_mask = (1 - torch.eye(n_nodes)).unsqueeze(0)
     edge_mask = edge_mask.repeat(n_samples, 1, 1).view(-1, 1).to(device)
@@ -110,12 +112,12 @@ def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
 def sample(args, device, generative_model, dataset_info,
            prop_dist=None, nodesxsample=torch.tensor([10]), context=None,
            fix_noise=False):
-    max_n_nodes = dataset_info['max_n_nodes']  # this is the maximum node_size in QM9
+    max_n_nodes = dataset_info['max_n_nodes']  # this is the maximum node_size in QM9 - see dataset_config
 
     assert int(torch.max(nodesxsample)) <= max_n_nodes
     batch_size = len(nodesxsample)
 
-    node_mask = torch.zeros(batch_size, max_n_nodes)
+    node_mask = torch.zeros(batch_size, max_n_nodes)  # nodesxsample determines num of nodes, then use model.sample
     for i in range(batch_size):
         node_mask[i, 0:nodesxsample[i]] = 1
 

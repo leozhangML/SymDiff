@@ -213,7 +213,7 @@ def setup_argparse(dataset):
     return parser
 
 
-###
+##
 
 class BoolArg(argparse.Action):
     """
@@ -288,7 +288,7 @@ def init_argparse(dataset):
     """
 
     parser = setup_argparse(dataset)
-    args = parser.parse_args([])
+    args = parser.parse_args([])  # LEO: use defaults?
     d = vars(args)
     d['dataset'] = dataset
 

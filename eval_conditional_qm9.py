@@ -46,7 +46,6 @@ def get_generator(dir_path, dataloaders, device, args_gen, property_norms):
     model.load_state_dict(model_state_dict)
 
     # The following function be computes the normalization parameters using the 'valid' partition
-
     if prop_dist is not None:
         prop_dist.set_normalizer(property_norms)
     return model.to(device), nodes_dist, prop_dist, dataset_info
@@ -84,7 +83,7 @@ class DiffusionDataloader:
         node_mask = node_mask.squeeze(2)
         context = context.squeeze(1)
 
-        # edge_mask
+        # Edge_mask
         bs, n_nodes = node_mask.size()
         edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
         diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool).unsqueeze(0)
@@ -120,16 +119,15 @@ class DiffusionDataloader:
 
 def main_quantitative(args):
     # Get classifier
-    #if args.task == "numnodes":
+    # if args.task == "numnodes":
     #    class_dir = args.classifiers_path[:-6] + "numnodes_%s" % args.property
-    #else:
+    # else:
     class_dir = args.classifiers_path
     classifier = get_classifier(class_dir).to(args.device)
 
     # Get generator and dataloader used to train the generator and evalute the classifier
     args_gen = get_args_gen(args.generators_path)
 
-    # Careful with this -->
     if not hasattr(args_gen, 'diffusion_noise_precision'):
         args_gen.normalization_factor = 1e-4
     if not hasattr(args_gen, 'normalization_factor'):
@@ -143,7 +141,6 @@ def main_quantitative(args):
                                                     args.device, args_gen, property_norms)
 
     # Create a dataloader with the generator
-
     mean, mad = property_norms[args.property]['mean'], property_norms[args.property]['mad']
 
     if args.task == 'edm':
@@ -165,6 +162,7 @@ def main_quantitative(args):
         loss = test(classifier, 0, dataloaders['train'], mean, mad, args.property, args.device, args.log_interval,
                     args.debug_break)
         print("Loss classifier on naive: %.4f" % loss)
+
     #elif args.task == 'numnodes':
     #    print("Numnodes: We evaluate the numnodes classifier on EDM samples")
     #    diffusion_dataloader = DiffusionDataloader(args_gen, model, nodes_dist, prop_dist, device,

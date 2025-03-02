@@ -65,14 +65,16 @@ def extract_conformers(args):
             bonds = [bond for bond in rd_mol.GetBonds()]
             for bond in bonds:
                 atom1, atom2 = [bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()]
-                # bond length
+
+                # Bond length
                 c1 = coords[atom1]
                 c2 = coords[atom2]
                 dist = np.linalg.norm(c1 - c2)
+
                 # Bin the distance
                 dist = int(dist * 100)
 
-                # atom types
+                # Atom types
                 at1_type = atom_nums[atom1]
                 at2_type = atom_nums[atom2]
                 if at1_type > at2_type:     # Sort the pairs to avoid redundancy
@@ -155,6 +157,7 @@ def analyse_geom_stability():
     mol_id = x[:, 0].astype(int)
     all_atom_types = x[:, 1].astype(int)
     all_positions = x[:, 2:]
+
     # Get ids corresponding to new molecules
     split_indices = np.nonzero(mol_id[:-1] - mol_id[1:])[0] + 1
     all_atom_types_split = np.split(all_atom_types, split_indices)
@@ -212,6 +215,7 @@ def debug_geom_stability(num_atoms=100000):
     mol_id = mol_id[~may_be_incomplete]
     all_atom_types = x[:, 1].astype(int)
     all_positions = x[:, 2:]
+    
     # Get ids corresponding to new molecules
     split_indices = np.nonzero(mol_id[:-1] - mol_id[1:])[0] + 1
     all_atom_types_split = np.split(all_atom_types, split_indices)

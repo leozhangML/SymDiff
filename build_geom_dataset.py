@@ -24,6 +24,7 @@ def extract_conformers(args):
         for smiles, all_info in drugs_1k.items():
             all_smiles.append(smiles)
             conformers = all_info['conformers']
+            
             # Get the energy of each conformer. Keep only the lowest values
             all_energies = []
             for conformer in conformers:
@@ -54,6 +55,7 @@ def extract_conformers(args):
 
     # Save conformations
     np.save(os.path.join(args.data_dir, save_file), dataset)
+
     # Save SMILES
     with open(os.path.join(args.data_dir, smiles_list_file), 'w') as f:
         for s in all_smiles:
@@ -73,12 +75,19 @@ def load_split_data(conformation_file, val_proportion=0.1, test_proportion=0.1,
 
     # base_path = os.path.dirname(conformation_file)
     all_data = np.load(conformation_file)  # 2d array: num_atoms x 5
-
     mol_id = all_data[:, 0].astype(int)
     conformers = all_data[:, 1:]
+
     # Get ids corresponding to new molecules
     split_indices = np.nonzero(mol_id[:-1] - mol_id[1:])[0] + 1
     data_list = np.split(conformers, split_indices)
+
+    # Show the size of the largest and smallest molecules
+    sizes = []
+    for i in range(len(data_list)):
+        sizes.append(data_list[i].shape[0])
+    print("Max size of molecule", max(sizes))
+    print("Smallest size of molecule", min(sizes))
 
     # Filter based on molecule size.
     if filter_size is not None:
@@ -97,13 +106,19 @@ def load_split_data(conformation_file, val_proportion=0.1, test_proportion=0.1,
     # np.save(os.path.join(base_path, 'geom_permutation.npy'), perm)
     # del perm
 
+    # Get the permutations
     perm = np.load(os.path.join(base_path, 'geom_permutation.npy'))
-    data_list = [data_list[i] for i in perm]
+    data_list = ([data_list[i] for i in perm])
 
     num_mol = len(data_list)
     val_index = int(num_mol * val_proportion)
     test_index = val_index + int(num_mol * test_proportion)
-    val_data, test_data, train_data = np.split(data_list, [val_index, test_index])
+    
+    # Create the splits properly, old code was wrong: np.split(data_list, [val_index, test_index])
+    val_data = data_list[:val_index]
+    test_data = data_list[val_index:test_index]
+    train_data = data_list[test_index:]
+    
     return train_data, val_data, test_data
 
 
@@ -118,8 +133,9 @@ class GeomDrugsDataset(Dataset):
 
         # Sort the data list by size
         lengths = [s.shape[0] for s in data_list]
-        argsort = np.argsort(lengths)               # Sort by decreasing size
+        argsort = np.argsort(lengths)               # sort by decreasing size
         self.data_list = [data_list[i] for i in argsort]
+
         # Store indices where the size changes
         self.split_indices = np.unique(np.sort(lengths), return_index=True)[1][1:]
 
@@ -175,7 +191,7 @@ def collate_fn(batch):
     batch_size, n_nodes = atom_mask.size()
     edge_mask = atom_mask.unsqueeze(1) * atom_mask.unsqueeze(2)
 
-    # mask diagonal
+    # Mask diagonal
     diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool,
                            device=edge_mask.device).unsqueeze(0)
     edge_mask *= diag_mask

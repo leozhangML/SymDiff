@@ -20,6 +20,9 @@ from qm9.analyze import analyze_stability_for_molecules, analyze_node_distributi
 from qm9.utils import prepare_context, compute_mean_mad
 from qm9 import visualizer as qm9_visualizer
 import qm9.losses as losses
+import numpy as np
+import json
+
 
 try:
     from qm9 import rdkit_functions
@@ -32,6 +35,15 @@ def check_mask_correct(variables, node_mask):
         assert_correctly_masked(variable, node_mask)
 
 
+def convert_str_to_bool(string):
+    if string == "True":
+        return True
+    elif string == "False":
+        return False
+    else:
+        raise ValueError("String is not a boolean")
+
+
 def analyze_and_save(args, eval_args, device, generative_model,
                      nodes_dist, prop_dist, dataset_info, n_samples=10,
                      batch_size=10, save_to_xyz=False):
@@ -40,7 +52,7 @@ def analyze_and_save(args, eval_args, device, generative_model,
     molecules = {'one_hot': [], 'x': [], 'node_mask': []}
     start_time = time.time()
     for i in range(int(n_samples/batch_size)):
-        nodesxsample = nodes_dist.sample(batch_size)
+        nodesxsample = nodes_dist.sample(batch_size)  # NOTE: can't use this with filtered
         one_hot, charges, x, node_mask = sample(
             args, device, generative_model, dataset_info, prop_dist=prop_dist, nodesxsample=nodesxsample)
 
@@ -60,7 +72,7 @@ def analyze_and_save(args, eval_args, device, generative_model,
                 one_hot, charges, x, dataset_info, id_from, name='molecule',
                 node_mask=node_mask)
 
-    molecules = {key: torch.cat(molecules[key], dim=0) for key in molecules}
+    molecules = {key: torch.cat(molecules[key], dim=0) for key in molecules}  # what are shapes to be able to do this?
     stability_dict, rdkit_metrics = analyze_stability_for_molecules(
         molecules, dataset_info)
 
@@ -106,10 +118,14 @@ def test(args, flow_dp, nodes_dist, device, dtype, loader, partition='Test', num
                     print(f"\r {partition} NLL \t, iter: {i}/{len(loader)}, "
                           f"NLL: {nll_epoch/n_samples:.2f}")
 
+    print("The type of the output of test() is:", type(nll_epoch/n_samples))
     return nll_epoch/n_samples
 
 
 def main():
+
+    # compute stability, nll etc. metrics on val/test sets for model_path
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str, default="outputs/edm_1",
                         help='Specify model path')
@@ -127,7 +143,7 @@ def main():
     with open(join(eval_args.model_path, 'args.pickle'), 'rb') as f:
         args = pickle.load(f)
 
-    # CAREFUL with this -->
+    # NOTE: CAREFUL with this -->
     if not hasattr(args, 'normalization_factor'):
         args.normalization_factor = 1
     if not hasattr(args, 'aggregation_method'):
@@ -156,7 +172,7 @@ def main():
     flow_state_dict = torch.load(join(eval_args.model_path, fn), map_location=device)
     generative_model.load_state_dict(flow_state_dict)
 
-    # Analyze stability, validity, uniqueness and novelty
+    # Analyze stability, validity, uniqueness and novelty with nodes_dist
     stability_dict, rdkit_metrics = analyze_and_save(
         args, eval_args, device, generative_model, nodes_dist,
         prop_dist, dataset_info, n_samples=eval_args.n_samples,

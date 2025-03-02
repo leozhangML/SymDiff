@@ -11,19 +11,23 @@ from qm9 import losses
 import time
 import torch
 
+from tqdm import tqdm
 
-def train_epoch(args, loader, epoch, model, model_dp, model_ema, ema, device, dtype, property_norms, optim,
-                nodes_dist, gradnorm_queue, dataset_info, prop_dist):
+import sym_nn.utils as sym_nn_utils
+
+
+def train_epoch(args, loader, epoch, model, model_dp, model_ema, ema, device, dtype, property_norms, optim, 
+                scheduler, nodes_dist, gradnorm_queue, dataset_info, prop_dist):
     model_dp.train()
     model.train()
     nll_epoch = []
     n_iterations = len(loader)
-    for i, data in enumerate(loader):
+    for i, data in tqdm(enumerate(loader)):
         x = data['positions'].to(device, dtype)
-        node_mask = data['atom_mask'].to(device, dtype).unsqueeze(2)
-        edge_mask = data['edge_mask'].to(device, dtype)
-        one_hot = data['one_hot'].to(device, dtype)
-        charges = (data['charges'] if args.include_charges else torch.zeros(0)).to(device, dtype)
+        node_mask = data['atom_mask'].to(device, dtype).unsqueeze(2)  # [bs, n_nodes, 1]
+        edge_mask = data['edge_mask'].to(device, dtype)  # [bs*n_nodes^2, 1]
+        one_hot = data['one_hot'].to(device, dtype)  # [bs, n_nodes, num_classes - i.e. 5 for qm9]
+        charges = (data['charges'] if args.include_charges else torch.zeros(0)).to(device, dtype)  # [bs, n_nodes, 1]
 
         x = remove_mean_with_mask(x, node_mask)
 
@@ -34,34 +38,39 @@ def train_epoch(args, loader, epoch, model, model_dp, model_ema, ema, device, dt
 
         x = remove_mean_with_mask(x, node_mask)
         if args.data_augmentation:
-            x = utils.random_rotation(x).detach()
+            g = sym_nn_utils.orthogonal_haar(dim=args.n_dims, target_tensor=x)
+            x = torch.bmm(x, g.transpose(1, 2)).detach()
 
         check_mask_correct([x, one_hot, charges], node_mask)
         assert_mean_zero_with_mask(x, node_mask)
 
         h = {'categorical': one_hot, 'integer': charges}
 
+        # Note: Conditioning is not used for our experiments
         if len(args.conditioning) > 0:
-            context = qm9utils.prepare_context(args.conditioning, data, property_norms).to(device, dtype)
+            context = qm9utils.prepare_context(args.conditioning, data, property_norms).to(device, dtype)  # [bs, n_nodes, context_node_nf]
             assert_correctly_masked(context, node_mask)
         else:
             context = None
 
         optim.zero_grad()
 
-        # transform batch through flow
+        # Transform batch through flow
         nll, reg_term, mean_abs_z = losses.compute_loss_and_nll(args, model_dp, nodes_dist,
-                                                                x, h, node_mask, edge_mask, context)
-        # standard nll from forward KL
+                                                                x, h, node_mask, edge_mask, context)  # reg_term, mean_abs_z is 0 but ode_reg=0.001?
+        # Standard nll from forward KL
         loss = nll + args.ode_regularization * reg_term
         loss.backward()
 
         if args.clip_grad:
-            grad_norm = utils.gradient_clipping(model, gradnorm_queue)
+            grad_norm = utils.gradient_clipping(args, model, gradnorm_queue, clipping_type=args.clipping_type)
         else:
             grad_norm = 0.
-
         optim.step()
+
+        if scheduler is not None:
+            wandb.log({"lr": optim.param_groups[0]["lr"]}, commit=True)
+            scheduler.step()
 
         # Update EMA if enabled.
         if args.ema_decay > 0:
@@ -77,13 +86,16 @@ def train_epoch(args, loader, epoch, model, model_dp, model_ema, ema, device, dt
             start = time.time()
             if len(args.conditioning) > 0:
                 save_and_sample_conditional(args, device, model_ema, prop_dist, dataset_info, epoch=epoch)
+            # saves 5 sampled molecules and 1 sampled chain to outputs (if stable)
+            # they use max_n_nodes
             save_and_sample_chain(model_ema, args, device, dataset_info, prop_dist, epoch=epoch,
                                   batch_id=str(i))
             sample_different_sizes_and_save(model_ema, nodes_dist, args, device, dataset_info,
                                             prop_dist, epoch=epoch)
             print(f'Sampling took {time.time() - start:.2f} seconds')
 
-            vis.visualize(f"outputs/{args.exp_name}/epoch_{epoch}_{i}", dataset_info=dataset_info, wandb=wandb)
+            # Visualise the molecules from .txt with argmax etc.
+            vis.visualize(f"outputs/{args.exp_name}/epoch_{epoch}_{i}/", dataset_info=dataset_info, wandb=wandb) 
             vis.visualize_chain(f"outputs/{args.exp_name}/epoch_{epoch}_{i}/chain/", dataset_info, wandb=wandb)
             if len(args.conditioning) > 0:
                 vis.visualize_chain("outputs/%s/epoch_%d/conditional/" % (args.exp_name, epoch), dataset_info,
@@ -91,7 +103,7 @@ def train_epoch(args, loader, epoch, model, model_dp, model_ema, ema, device, dt
         wandb.log({"Batch NLL": nll.item()}, commit=True)
         if args.break_train_epoch:
             break
-    wandb.log({"Train Epoch NLL": np.mean(nll_epoch)}, commit=False)
+    wandb.log({"Train Epoch NLL": np.mean(nll_epoch)}, commit=True)  
 
 
 def check_mask_correct(variables, node_mask):
@@ -102,6 +114,7 @@ def check_mask_correct(variables, node_mask):
 
 def test(args, loader, epoch, eval_model, device, dtype, property_norms, nodes_dist, partition='Test'):
     eval_model.eval()
+    print(f"{partition} at epoch {epoch}")
     with torch.no_grad():
         nll_epoch = 0
         n_samples = 0
@@ -135,12 +148,12 @@ def test(args, loader, epoch, eval_model, device, dtype, property_norms, nodes_d
             else:
                 context = None
 
-            # transform batch through flow
+            # Transform batch through flow
             nll, _, _ = losses.compute_loss_and_nll(args, eval_model, nodes_dist, x, h,
                                                     node_mask, edge_mask, context)
-            # standard nll from forward KL
+            # Standard nll from forward KL
 
-            nll_epoch += nll.item() * batch_size
+            nll_epoch += nll.item() * batch_size  # converts mean to sum
             n_samples += batch_size
             if i % args.n_report_steps == 0:
                 print(f"\r {partition} NLL \t epoch: {epoch}, iter: {i}/{n_iterations}, "
@@ -164,36 +177,36 @@ def sample_different_sizes_and_save(model, nodes_dist, args, device, dataset_inf
                                     n_samples=5, epoch=0, batch_size=100, batch_id=''):
     batch_size = min(batch_size, n_samples)
     for counter in range(int(n_samples/batch_size)):
-        nodesxsample = nodes_dist.sample(batch_size)
+        nodesxsample = nodes_dist.sample(batch_size)  # check with the filter
         one_hot, charges, x, node_mask = sample(args, device, model, prop_dist=prop_dist,
                                                 nodesxsample=nodesxsample,
                                                 dataset_info=dataset_info)
-        print(f"Generated molecule: Positions {x[:-1, :, :]}")
         vis.save_xyz_file(f'outputs/{args.exp_name}/epoch_{epoch}_{batch_id}/', one_hot, charges, x, dataset_info,
                           batch_size * counter, name='molecule')
 
 
 def analyze_and_save(epoch, model_sample, nodes_dist, args, device, dataset_info, prop_dist,
                      n_samples=1000, batch_size=100):
-    print(f'Analyzing molecule stability at epoch {epoch}...')
-    batch_size = min(batch_size, n_samples)
-    assert n_samples % batch_size == 0
-    molecules = {'one_hot': [], 'x': [], 'node_mask': []}
-    for i in range(int(n_samples/batch_size)):
-        nodesxsample = nodes_dist.sample(batch_size)
-        one_hot, charges, x, node_mask = sample(args, device, model_sample, dataset_info, prop_dist,
+    print(f'Analyzing molecule stability at epoch {epoch}... for {n_samples}')
+    with torch.no_grad():
+        batch_size = min(batch_size, n_samples)
+        assert n_samples % batch_size == 0
+        molecules = {'one_hot': [], 'x': [], 'node_mask': []}
+        for i in tqdm(range(int(n_samples/batch_size))):
+            nodesxsample = nodes_dist.sample(batch_size)
+            one_hot, charges, x, node_mask = sample(args, device, model_sample, dataset_info, prop_dist,
                                                 nodesxsample=nodesxsample)
 
-        molecules['one_hot'].append(one_hot.detach().cpu())
-        molecules['x'].append(x.detach().cpu())
-        molecules['node_mask'].append(node_mask.detach().cpu())
+            molecules['one_hot'].append(one_hot.detach().cpu())
+            molecules['x'].append(x.detach().cpu())
+            molecules['node_mask'].append(node_mask.detach().cpu())
 
-    molecules = {key: torch.cat(molecules[key], dim=0) for key in molecules}
-    validity_dict, rdkit_tuple = analyze_stability_for_molecules(molecules, dataset_info)
+        molecules = {key: torch.cat(molecules[key], dim=0) for key in molecules}
+        validity_dict, rdkit_tuple = analyze_stability_for_molecules(molecules, dataset_info)  # atm stable, mol stable
 
-    wandb.log(validity_dict)
-    if rdkit_tuple is not None:
-        wandb.log({'Validity': rdkit_tuple[0][0], 'Uniqueness': rdkit_tuple[0][1], 'Novelty': rdkit_tuple[0][2]})
+        wandb.log(validity_dict)
+        if rdkit_tuple is not None:
+            wandb.log({'Validity': rdkit_tuple[0][0], 'Uniqueness': rdkit_tuple[0][1], 'Novelty': rdkit_tuple[0][2]})
     return validity_dict
 
 

@@ -11,9 +11,15 @@ class EGNN_dynamics_QM9(nn.Module):
                  act_fn=torch.nn.SiLU(), n_layers=4, attention=False,
                  condition_time=True, tanh=False, mode='egnn_dynamics', norm_constant=0,
                  inv_sublayers=2, sin_embedding=False, normalization_factor=100, aggregation_method='sum'):
+        
+        """
+        normalization_factor: for aggregation_method
+        """
+
         super().__init__()
         self.mode = mode
         if mode == 'egnn_dynamics':
+            # always set in_edge_nf=1?
             self.egnn = EGNN(
                 in_node_nf=in_node_nf + context_node_nf, in_edge_nf=1,
                 hidden_nf=hidden_nf, device=device, act_fn=act_fn,
@@ -29,7 +35,7 @@ class EGNN_dynamics_QM9(nn.Module):
                 act_fn=act_fn, n_layers=n_layers, attention=attention,
                 normalization_factor=normalization_factor, aggregation_method=aggregation_method)
 
-        self.context_node_nf = context_node_nf
+        self.context_node_nf = context_node_nf  # 0 for no conditioning
         self.device = device
         self.n_dims = n_dims
         self._edges_dict = {}
@@ -38,7 +44,7 @@ class EGNN_dynamics_QM9(nn.Module):
     def forward(self, t, xh, node_mask, edge_mask, context=None):
         raise NotImplementedError
 
-    def wrap_forward(self, node_mask, edge_mask, context):
+    def wrap_forward(self, node_mask, edge_mask, context):  # same node_mask etc. for each time, state
         def fwd(time, state):
             return self._forward(time, state, node_mask, edge_mask, context)
         return fwd
@@ -46,19 +52,31 @@ class EGNN_dynamics_QM9(nn.Module):
     def unwrap_forward(self):
         return self._forward
 
-    def _forward(self, t, xh, node_mask, edge_mask, context):
+    def _forward(self, t, xh, node_mask, edge_mask, context):  # used in phi for training
+        """
+        t: [bs] or [1]
+        xh: [bs, n_nodes, dims] - contains pos, cat h, int h
+        node_mask: [bs, n_nodes]
+        edge_masks [bs*n_nodes^2, 1]
+        context: ?
+
+        Just need to accept [bs, n_nodes, dim] for xh (add conditioning info) and accept node_mask for
+        correct masking - need some projection matrix for correct dims?
+
+        """
+
         bs, n_nodes, dims = xh.shape
         h_dims = dims - self.n_dims
-        edges = self.get_adj_matrix(n_nodes, bs, self.device)
+        edges = self.get_adj_matrix(n_nodes, bs, self.device)  # needed for GNN
         edges = [x.to(self.device) for x in edges]
         node_mask = node_mask.view(bs*n_nodes, 1)
-        edge_mask = edge_mask.view(bs*n_nodes*n_nodes, 1)
-        xh = xh.view(bs*n_nodes, -1).clone() * node_mask
-        x = xh[:, 0:self.n_dims].clone()
+        edge_mask = edge_mask.view(bs*n_nodes*n_nodes, 1) 
+        xh = xh.view(bs*n_nodes, -1).clone() * node_mask  # [bs*n_nodes, dims]  -  why use .clone() here?
+        x = xh[:, 0:self.n_dims].clone()  # [bs*n_nodes, n_dim] for pos
         if h_dims == 0:
-            h = torch.ones(bs*n_nodes, 1).to(self.device)
+            h = torch.ones(bs*n_nodes, 1).to(self.device)  # [bs*n_nodes, 1] ?
         else:
-            h = xh[:, self.n_dims:].clone()
+            h = xh[:, self.n_dims:].clone()  # [bs*n_nodes, h_dim]
 
         if self.condition_time:
             if np.prod(t.size()) == 1:
@@ -68,16 +86,16 @@ class EGNN_dynamics_QM9(nn.Module):
                 # t is different over the batch dimension.
                 h_time = t.view(bs, 1).repeat(1, n_nodes)
                 h_time = h_time.view(bs * n_nodes, 1)
-            h = torch.cat([h, h_time], dim=1)
+            h = torch.cat([h, h_time], dim=1)  # add time to h
 
         if context is not None:
             # We're conditioning, awesome!
-            context = context.view(bs*n_nodes, self.context_node_nf)
-            h = torch.cat([h, context], dim=1)
+            context = context.view(bs*n_nodes, self.context_node_nf)  # [bs*n_nodes, context_node_nf]
+            h = torch.cat([h, context], dim=1)  # add context to h
 
         if self.mode == 'egnn_dynamics':
             h_final, x_final = self.egnn(h, x, edges, node_mask=node_mask, edge_mask=edge_mask)
-            vel = (x_final - x) * node_mask  # This masking operation is redundant but just in case
+            vel = (x_final - x) * node_mask  # This masking operation is redundant but just in case - NOTE: why subtract x??
         elif self.mode == 'gnn_dynamics':
             xh = torch.cat([x, h], dim=1)
             output = self.gnn(xh, edges, node_mask=node_mask)
@@ -95,7 +113,7 @@ class EGNN_dynamics_QM9(nn.Module):
             # Slice off last dimension which represented time.
             h_final = h_final[:, :-1]
 
-        vel = vel.view(bs, n_nodes, -1)
+        vel = vel.view(bs, n_nodes, -1)  # [bs, n_nodes, 3]
 
         if torch.any(torch.isnan(vel)):
             print('Warning: detected nan, resetting EGNN output to zero.')
@@ -109,8 +127,9 @@ class EGNN_dynamics_QM9(nn.Module):
         if h_dims == 0:
             return vel
         else:
-            h_final = h_final.view(bs, n_nodes, -1)
-            return torch.cat([vel, h_final], dim=2)
+            h_final = h_final.view(bs, n_nodes, -1)  # [bs, n_nodes, h_dim]
+            out = torch.cat([vel, h_final], dim=2)
+            return out
 
     def get_adj_matrix(self, n_nodes, batch_size, device):
         if n_nodes in self._edges_dict:

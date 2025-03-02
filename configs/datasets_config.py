@@ -33,11 +33,12 @@ qm9_with_h = {
     # 'bond2_radius': {'H': -1000, 'C': 67, 'N': 60, 'O': 57, 'F': 59},
     # 'bond3_radius': {'H': -1000, 'C': 60, 'N': 54, 'O': 53, 'F': 53}}
 
+# NOTE: LEO changed max_n_nodes - should be fine
 qm9_without_h = {
     'name': 'qm9',
     'atom_encoder': {'C': 0, 'N': 1, 'O': 2, 'F': 3},
     'atom_decoder': ['C', 'N', 'O', 'F'],
-    'max_n_nodes': 29,
+    'max_n_nodes': 9,
     'n_nodes': {9: 83366, 8: 13625, 7: 2404, 6: 475, 5: 91, 4: 25, 3: 7, 1: 2, 2: 5},
     'atom_types': {0: 635559, 2: 140202, 1: 101476, 3: 2323},
     'distances': [594, 1232, 3706, 4736, 5478, 9156, 8762, 13260, 45674, 174676, 469292,

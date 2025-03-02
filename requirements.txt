@@ -5,3 +5,6 @@ torch
 torchvision
 tqdm
 wandb
+transformers
+timm
+matplotlib

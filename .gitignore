@@ -30,3 +30,10 @@ qm9/property_prediction/outputs/*
 qm9_conditional.sh
 figures/
 geom_drugs.sh
+test.py
+view_data.ipynb
+run.sh
+*.sh
+slurm/
+notes/
+plots/

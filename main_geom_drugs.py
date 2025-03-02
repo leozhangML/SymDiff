@@ -10,7 +10,7 @@ import utils
 import argparse
 import wandb
 from os.path import join
-from qm9.models import get_optim, get_model
+from qm9.models import get_optim, get_scheduler, get_model
 from equivariant_diffusion import en_diffusion
 
 from equivariant_diffusion import utils as diffusion_utils
@@ -19,7 +19,7 @@ import time
 import pickle
 
 from qm9.utils import prepare_context, compute_mean_mad
-import train_test
+from train_test import train_epoch, test, analyze_and_save
 
 
 parser = argparse.ArgumentParser(description='e3_diffusion')
@@ -29,6 +29,11 @@ parser.add_argument('--model', type=str, default='egnn_dynamics',
                          'kernel_dynamics | egnn_dynamics |gnn_dynamics')
 parser.add_argument('--probabilistic_model', type=str, default='diffusion',
                     help='diffusion')
+parser.add_argument('--break_train_epoch', type=eval, default=False,
+                    help='True | False')
+
+parser.add_argument('--datadir', type=str, default=None,
+                    help='Give the path to the directory containing the data')
 
 # Training complexity is O(1) (unaffected), but sampling complexity O(steps).
 parser.add_argument('--diffusion_steps', type=int, default=500)
@@ -38,11 +43,19 @@ parser.add_argument('--diffusion_loss_type', type=str, default='l2',
                     help='vlb, l2')
 parser.add_argument('--diffusion_noise_precision', type=float, default=1e-5)
 
-parser.add_argument('--n_epochs', type=int, default=10000)
-parser.add_argument('--batch_size', type=int, default=64)
-parser.add_argument('--lr', type=float, default=5e-5)
-parser.add_argument('--break_train_epoch', type=eval, default=False,
-                    help='True | False')
+parser.add_argument('--n_epochs', type=int, default=200)
+parser.add_argument('--batch_size', type=int, default=128)
+parser.add_argument('--lr', type=float, default=2e-4)
+parser.add_argument('--use_amsgrad', action="store_true")  # default from EDM
+parser.add_argument('--weight_decay', type=float, default=1e-12)  # default from EDM
+
+parser.add_argument('--scheduler', type=str, default=None)  # default from EDM
+parser.add_argument('--num_warmup_steps', type=int, default=30000)  # default from EDM
+parser.add_argument('--num_training_steps', type=int, default=350000)  # default from EDM
+
+parser.add_argument('--clipping_type', type=str, default="queue")
+parser.add_argument('--max_grad_norm', type=float, default=1.5)
+
 parser.add_argument('--dp', type=eval, default=True,
                     help='True | False')
 parser.add_argument('--condition_time', type=eval, default=True,
@@ -51,6 +64,7 @@ parser.add_argument('--clip_grad', type=eval, default=True,
                     help='True | False')
 parser.add_argument('--trace', type=str, default='hutch',
                     help='hutch | exact')
+
 # EGNN args -->
 parser.add_argument('--n_layers', type=int, default=6,
                     help='number of layers')
@@ -67,6 +81,7 @@ parser.add_argument('--norm_constant', type=float, default=1,
 parser.add_argument('--sin_embedding', type=eval, default=False,
                     help='whether using or not the sin embedding')
 # <-- EGNN args
+
 parser.add_argument('--ode_regularization', type=float, default=1e-3)
 parser.add_argument('--dataset', type=str, default='geom',
                     help='dataset name')
@@ -102,6 +117,7 @@ parser.add_argument('--n_stability_samples', type=int, default=20,
                     help='Number of samples to compute the stability')
 parser.add_argument('--normalize_factors', type=eval, default=[1, 4, 10],
                     help='normalize factors for [x, categorical, integer]')
+
 parser.add_argument('--remove_h', action='store_true')
 parser.add_argument('--include_charges', type=eval, default=False, help='include atom charge or not')
 parser.add_argument('--visualize_every_batch', type=int, default=5000)
@@ -112,13 +128,40 @@ parser.add_argument('--aggregation_method', type=str, default='sum',
 parser.add_argument('--filter_molecule_size', type=int, default=None,
                     help="Only use molecules below this size.")
 parser.add_argument('--sequential', action='store_true',
-                    help='Organize data by size to reduce average memory usage.')
-args = parser.parse_args()
+                    help='Organize data by size to reduce average memory usage.')     # This is for GNNs, keep it off
 
-data_file = './data/geom/geom_drugs_30.npy'
+# -------- sym_diff args -------- #
+parser.add_argument("--xh_hidden_size", type=int, default=128, help="config for DDG")
+parser.add_argument("--K", type=int, default=128, help="config for DDG")
+
+parser.add_argument("--enc_hidden_size", type=int, default=64, help="config for DDG")
+parser.add_argument("--enc_depth", type=int, default=4, help="config for DDG")
+parser.add_argument("--enc_num_heads", type=int, default=4, help="config for DDG")
+parser.add_argument("--enc_mlp_ratio", type=float, default=4, help="config for DDG")
+
+parser.add_argument("--dec_hidden_features", type=int, default=32, help="config for DDG")
+
+parser.add_argument("--hidden_size", type=int, default=256, help="config for DDG")
+parser.add_argument("--depth", type=int, default=6, help="config for DDG")
+parser.add_argument("--num_heads", type=int, default=4, help="config for DDG")
+parser.add_argument("--mlp_ratio", type=float, default=2.0, help="config for DDG")
+parser.add_argument("--mlp_dropout", type=float, default=0.0, help="config for DDG")
+
+parser.add_argument("--enc_concat_h", action="store_true", help="config for DDG")
+
+parser.add_argument("--noise_dims", type=int, default=16, help="config for DDG")
+parser.add_argument("--noise_std", type=float, default=1.0, help="config for DDG")
+
+parser.add_argument("--mlp_type", type=str, default="swiglu", help="config for DDG")
+
+parser.add_argument("--fix_qr", action="store_true", help="Whether to change the use of QR")
+
+
+args = parser.parse_args()
+data_file = args.datadir
 
 if args.remove_h:
-    raise NotImplementedError()
+    raise NotImplementedError('Remove H not implemented.')
 else:
     dataset_info = geom_with_h
 
@@ -145,17 +188,19 @@ atom_decoder = dataset_info['atom_decoder']
 # args, unparsed_args = parser.parse_known_args()
 args.wandb_usr = utils.get_wandb_username(args.wandb_usr)
 
+# If resume training, load the arguments from the previous run.
 if args.resume is not None:
     exp_name = args.exp_name + '_resume'
     start_epoch = args.start_epoch
     resume = args.resume
     wandb_usr = args.wandb_usr
 
+    # Load the arguments from the previous run
     with open(join(args.resume, 'args.pickle'), 'rb') as f:
         args = pickle.load(f)
     args.resume = resume
     args.break_train_epoch = False
-    args.exp_name = exp_name
+    args.exp_name = exp_name  # add _resume to the name
     args.start_epoch = start_epoch
     args.wandb_usr = wandb_usr
     print(args)
@@ -168,7 +213,7 @@ if args.no_wandb:
     mode = 'disabled'
 else:
     mode = 'online' if args.online else 'offline'
-kwargs = {'entity': args.wandb_usr, 'name': args.exp_name, 'project': 'e3_diffusion_geom', 'config': args,
+kwargs = {'name': args.exp_name, 'project': 'e3_diffusion_geom_drugs', 'config': args,
           'settings': wandb.Settings(_disable_stats=True), 'reinit': True, 'mode': mode}
 wandb.init(**kwargs)
 wandb.save('*.txt')
@@ -176,6 +221,7 @@ wandb.save('*.txt')
 data_dummy = next(iter(dataloaders['train']))
 
 
+# For conditional generation - ignore
 if len(args.conditioning) > 0:
     print(f'Conditioning on {args.conditioning}')
     property_norms = compute_mean_mad(dataloaders, args.conditioning)
@@ -192,20 +238,24 @@ args.context_node_nf = context_node_nf
 model, nodes_dist, prop_dist = get_model(args, device, dataset_info, dataloader_train=dataloaders['train'])
 model = model.to(device)
 optim = get_optim(args, model)
-# print(model)
-
+scheduler = get_scheduler(args, optim)
 
 gradnorm_queue = utils.Queue()
-gradnorm_queue.add(3000)  # Add large value that will be flushed.
+gradnorm_queue.add(3000)  # add large value that will be flushed.
 
 
 def main():
+    # If resuming, load the model and optimizer state dicts.
     if args.resume is not None:
-        flow_state_dict = torch.load(join(args.resume, 'flow.npy'))
-        dequantizer_state_dict = torch.load(join(args.resume, 'dequantizer.npy'))
+        flow_state_dict = torch.load(join(args.resume, 'generative_model.npy'))
+        # dequantizer_state_dict = torch.load(join(args.resume, 'dequantizer.npy'))
         optim_state_dict = torch.load(join(args.resume, 'optim.npy'))
         model.load_state_dict(flow_state_dict)
         optim.load_state_dict(optim_state_dict)
+
+        if args.scheduler is not None:
+            scheduler_state_dict = torch.load(join(args.resume, 'scheduler.npy'))
+            scheduler.load_state_dict(scheduler_state_dict)        
 
     # Initialize dataparallel if enabled and possible.
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
@@ -220,6 +270,10 @@ def main():
         model_ema = copy.deepcopy(model)
         ema = diffusion_utils.EMA(args.ema_decay)
 
+        if args.resume is not None:
+            ema_state_dict = torch.load(join(args.resume, 'generative_model_ema.npy'))
+            model_ema.load_state_dict(ema_state_dict)        
+
         if args.dp and torch.cuda.device_count() > 1:
             model_ema_dp = torch.nn.DataParallel(model_ema)
         else:
@@ -232,23 +286,30 @@ def main():
     best_nll_val = 1e8
     best_nll_test = 1e8
     for epoch in range(args.start_epoch, args.n_epochs):
+        wandb.log({"Epoch": epoch}, commit=True)
+        print(f"--- Epoch {epoch} ---")        
         start_epoch = time.time()
-        train_test.train_epoch(args, dataloaders['train'], epoch, model, model_dp, model_ema, ema, device, dtype,
-                               property_norms, optim, nodes_dist, gradnorm_queue, dataset_info,
-                               prop_dist)
+        train_epoch(args=args, loader=dataloaders['train'], epoch=epoch, model=model, model_dp=model_dp,
+                    model_ema=model_ema, ema=ema, device=device, dtype=dtype, property_norms=property_norms,
+                    nodes_dist=nodes_dist, dataset_info=dataset_info,
+                    gradnorm_queue=gradnorm_queue, optim=optim, scheduler=scheduler, prop_dist=prop_dist)
         print(f"Epoch took {time.time() - start_epoch:.1f} seconds.")
 
-        if epoch % args.test_epochs == 0:
+        if epoch % args.test_epochs == 0 and epoch != start_epoch: 
             if isinstance(model, en_diffusion.EnVariationalDiffusion):
-                wandb.log(model.log_info(), commit=True)
+                if args.com_free:
+                    wandb.log(model.log_info(), commit=True)  # should be constant for l2                
 
             if not args.break_train_epoch:
-                train_test.analyze_and_save(epoch, model_ema, nodes_dist, args, device,
-                                            dataset_info, prop_dist, n_samples=args.n_stability_samples)
-            nll_val = train_test.test(args, dataloaders['val'], epoch, model_ema_dp, device, dtype,
-                                      property_norms, nodes_dist, partition='Val')
-            nll_test = train_test.test(args, dataloaders['test'], epoch, model_ema_dp, device, dtype,
-                                       property_norms, nodes_dist, partition='Test')
+                validity_dict = analyze_and_save(args=args, epoch=epoch, model_sample=model_ema, nodes_dist=nodes_dist,
+                                                dataset_info=dataset_info, device=device,
+                                                prop_dist=prop_dist, n_samples=args.n_stability_samples)
+            nll_val = test(args=args, loader=dataloaders['val'], epoch=epoch, eval_model=model_ema_dp,
+                           partition='Val', device=device, dtype=dtype, nodes_dist=nodes_dist,
+                           property_norms=property_norms)
+            nll_test = test(args=args, loader=dataloaders['test'], epoch=epoch, eval_model=model_ema_dp,
+                            partition='Test', device=device, dtype=dtype,
+                            nodes_dist=nodes_dist, property_norms=property_norms)
 
             if nll_val < best_nll_val:
                 best_nll_val = nll_val
@@ -257,18 +318,13 @@ def main():
                     args.current_epoch = epoch + 1
                     utils.save_model(optim, 'outputs/%s/optim.npy' % args.exp_name)
                     utils.save_model(model, 'outputs/%s/generative_model.npy' % args.exp_name)
+                    if scheduler is not None:
+                        utils.save_model(scheduler, 'outputs/%s/scheduler.npy' % args.exp_name)                    
                     if args.ema_decay > 0:
                         utils.save_model(model_ema, 'outputs/%s/generative_model_ema.npy' % args.exp_name)
                     with open('outputs/%s/args.pickle' % args.exp_name, 'wb') as f:
                         pickle.dump(args, f)
 
-            if args.save_model:
-                utils.save_model(optim, 'outputs/%s/optim_%d.npy' % (args.exp_name, epoch))
-                utils.save_model(model, 'outputs/%s/generative_model_%d.npy' % (args.exp_name, epoch))
-                if args.ema_decay > 0:
-                    utils.save_model(model_ema, 'outputs/%s/generative_model_ema_%d.npy' % (args.exp_name, epoch))
-                with open('outputs/%s/args_%d.pickle' % (args.exp_name, epoch), 'wb') as f:
-                    pickle.dump(args, f)
             print('Val loss: %.4f \t Test loss:  %.4f' % (nll_val, nll_test))
             print('Best val loss: %.4f \t Best test loss:  %.4f' % (best_nll_val, best_nll_test))
             wandb.log({"Val loss ": nll_val}, commit=True)

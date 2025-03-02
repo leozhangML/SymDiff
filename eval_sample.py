@@ -112,7 +112,6 @@ def main():
     with open(join(eval_args.model_path, 'args.pickle'), 'rb') as f:
         args = pickle.load(f)
 
-    # CAREFUL with this -->
     if not hasattr(args, 'normalization_factor'):
         args.normalization_factor = 1
     if not hasattr(args, 'aggregation_method'):
@@ -122,7 +121,7 @@ def main():
     device = torch.device("cuda" if args.cuda else "cpu")
     args.device = device
     dtype = torch.float32
-    utils.create_folders(args)
+    utils.create_folders(args)  # /outputs/exp_name
     print(args)
 
     dataset_info = get_dataset_info(args.dataset, args.remove_h)
@@ -142,7 +141,7 @@ def main():
     print('Sampling handful of molecules.')
     sample_different_sizes_and_save(
         args, eval_args, device, flow, nodes_dist,
-        dataset_info=dataset_info, n_samples=30)
+        dataset_info=dataset_info, n_samples=30)  # different to validation step - /eval/molecules
 
     print('Sampling stable molecules.')
     sample_only_stable_different_sizes_and_save(

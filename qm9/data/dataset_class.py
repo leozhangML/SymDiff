@@ -46,7 +46,7 @@ class ProcessedDataset(Dataset):
         if included_species is None:
             included_species = torch.unique(self.data['charges'], sorted=True)
             if included_species[0] == 0:
-                included_species = included_species[1:]
+                included_species = included_species[1:]  # ???
 
         if subtract_thermo:
             thermo_targets = [key.split('_')[0] for key in data.keys() if key.endswith('_thermo')]

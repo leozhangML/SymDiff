@@ -8,6 +8,8 @@ import logging, os, urllib
 
 from qm9.data.prepare.utils import download_data, is_int, cleanup_file
 
+"""50k of small molecules - probably not needed"""
+
 md17_base_url = 'http://quantum-machine.org/gdml/data/npz/'
 
 md17_subsets = {'benzene': 'benzene_old_dft',

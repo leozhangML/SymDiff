@@ -1,6 +1,7 @@
 import logging
 import os
 
+print(os.getcwd())
 from qm9.data.prepare.md17 import download_dataset_md17
 from qm9.data.prepare.qm9 import download_dataset_qm9
 
@@ -69,6 +70,7 @@ def prepare_dataset(datadir, dataset, subset=None, splits=None, cleanup=True, fo
     if new_download or force_download:
         logging.info('Dataset does not exist. Downloading!')
         if dataset.lower().startswith('qm9'):
+            print("DOWNLOADING")
             download_dataset_qm9(datadir, dataset, splits, cleanup=cleanup)
         elif dataset.lower().startswith('md17'):
             download_dataset_md17(datadir, dataset, subset,
@@ -78,3 +80,7 @@ def prepare_dataset(datadir, dataset, subset=None, splits=None, cleanup=True, fo
                 'Incorrect choice of dataset! Must chose qm9/md17!')
 
     return datafiles
+
+
+if __name__ == "__main__":
+    pass

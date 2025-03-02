@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='EN_diffusion',
+    name='SymDiff',
     version='1.0.0',
     url=None,
     author='Author Name',

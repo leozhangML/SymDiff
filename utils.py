@@ -47,26 +47,34 @@ class Queue():
         return np.std(self.items)
 
 
-def gradient_clipping(flow, gradnorm_queue):
-    # Allow gradient norm to be 150% + 2 * stdev of the recent history.
-    max_grad_norm = 1.5 * gradnorm_queue.mean() + 2 * gradnorm_queue.std()
+def gradient_clipping(args, flow, gradnorm_queue, clipping_type="queue"):
 
-    # Clips gradient and returns the norm
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        flow.parameters(), max_norm=max_grad_norm, norm_type=2.0)
+    if clipping_type == "queue":
+        # Allow gradient norm to be 150% + 2 * stdev of the recent history.
+        max_grad_norm = 1.5 * gradnorm_queue.mean() + 2 * gradnorm_queue.std()
 
-    if float(grad_norm) > max_grad_norm:
-        gradnorm_queue.add(float(max_grad_norm))
-    else:
+        # Clips gradient and returns the norm
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            flow.parameters(), max_norm=max_grad_norm, norm_type=2.0)
+
+        if float(grad_norm) > max_grad_norm:
+            gradnorm_queue.add(float(max_grad_norm))
+        else:
+            gradnorm_queue.add(float(grad_norm))
+
+        return grad_norm
+
+    elif clipping_type == "norm":
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            flow.parameters(), max_norm=args.max_grad_norm, norm_type=2.0)
         gradnorm_queue.add(float(grad_norm))
+        return grad_norm
 
-    if float(grad_norm) > max_grad_norm:
-        print(f'Clipped gradient with value {grad_norm:.1f} '
-              f'while allowed {max_grad_norm:.1f}')
-    return grad_norm
+    else:
+        raise ValueError
 
 
-# Rotation data augmntation
+# Rotation data augmntation - NOTE: this is not distributed according to the Haar 
 def random_rotation(x):
     bs, n_nodes, n_dims = x.size()
     device = x.device
@@ -141,13 +149,9 @@ def get_wandb_username(username):
 
 
 if __name__ == "__main__":
-
-
-    ## Test random_rotation
+    # Test random_rotation
     bs = 2
     n_nodes = 16
     n_dims = 3
     x = torch.randn(bs, n_nodes, n_dims)
-    print(x)
     x = random_rotation(x)
-    #print(x)

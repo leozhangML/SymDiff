@@ -39,8 +39,7 @@ def compute_qm9_smiles(dataset_name, remove_h):
         mol = mol2smiles(mol)
         if mol is not None:
             mols_smiles.append(mol)
-        if i % 1000 == 0:
-            print("\tConverting QM9 dataset to SMILES {0:.2%}".format(float(i)/len(dataloaders['train'])))
+
     return mols_smiles
 
 

@@ -6,7 +6,6 @@ import random
 import matplotlib
 import imageio
 
-
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from qm9 import bond_analyze
@@ -175,9 +174,11 @@ def plot_data3d(positions, atom_type, dataset_info, camera_elev=0, camera_azim=0
     ax._axis3don = False
 
     if bg == 'black':
-        ax.w_xaxis.line.set_color("black")
+        #ax.w_xaxis.line.set_color("black")
+        ax.xaxis.line.set_color("black")
     else:
-        ax.w_xaxis.line.set_color("white")
+        #ax.w_xaxis.line.set_color("white")
+        ax.xaxis.line.set_color("white")
 
     plot_molecule(ax, positions, atom_type, alpha, spheres_3d,
                   hex_bg_color, dataset_info)
@@ -238,9 +239,11 @@ def plot_data3d_uncertainty(
     ax._axis3don = False
 
     if bg == 'black':
-        ax.w_xaxis.line.set_color("black")
+        #ax.w_xaxis.line.set_color("black")
+        ax.xaxis.line.set_color("black")
     else:
-        ax.w_xaxis.line.set_color("white")
+        #ax.w_xaxis.line.set_color("white")
+        ax.xaxis.line.set_color("white")
 
     for i in range(len(all_positions)):
         positions = all_positions[i]
@@ -311,7 +314,6 @@ def visualize(path, dataset_info, max_num=25, wandb=None, spheres_3d=False):
         atom_type = torch.argmax(one_hot, dim=1).numpy()
         dists = torch.cdist(positions.unsqueeze(0), positions.unsqueeze(0)).squeeze(0)
         dists = dists[dists > 0]
-        print("Average distance between atoms", dists.mean().item())
         plot_data3d(positions, atom_type, dataset_info=dataset_info, save_path=file[:-4] + '.png',
                     spheres_3d=spheres_3d)
 
@@ -342,7 +344,6 @@ def visualize_chain(path, dataset_info, wandb=None, spheres_3d=False,
     imgs = [imageio.imread(fn) for fn in save_paths]
     dirname = os.path.dirname(save_paths[0])
     gif_path = dirname + '/output.gif'
-    print(f'Creating gif with {len(imgs)} images')
     # Add the last frame 10 times so that the final result remains temporally.
     # imgs.extend([imgs[-1]] * 10)
     imageio.mimsave(gif_path, imgs, subrectangles=True)
@@ -384,7 +385,6 @@ def visualize_chain_uncertainty(
     imgs = [imageio.imread(fn) for fn in save_paths]
     dirname = os.path.dirname(save_paths[0])
     gif_path = dirname + '/output.gif'
-    print(f'Creating gif with {len(imgs)} images')
     # Add the last frame 10 times so that the final result remains temporally.
     # imgs.extend([imgs[-1]] * 10)
     imageio.mimsave(gif_path, imgs, subrectangles=True)
@@ -395,6 +395,7 @@ def visualize_chain_uncertainty(
 
 if __name__ == '__main__':
     #plot_grid()
+
     import qm9.dataset as dataset
     from configs.datasets_config import qm9_with_h, geom_with_h
     matplotlib.use('macosx')

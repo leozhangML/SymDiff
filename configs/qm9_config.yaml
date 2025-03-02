@@ -3,7 +3,7 @@ exp_name: debug_10
 dataset: 'qm9'            # qm9, qm9_positional
 filter_n_atoms: null      # When set to an integer value, QM9 will only contain molecules of that amount of atoms
 n_report_steps: 1
-wandb_usr: cvignac
+wandb_usr: zhangleo1209
 no_cuda: False
 wandb: False             # Use wandb?
 online: True             # True: online / False: offline

@@ -55,7 +55,7 @@ def preprocess_input(one_hot, charges, charge_power, charge_scale, device):
 
 def prepare_context(conditioning, minibatch, property_norms):
     batch_size, n_nodes, _ = minibatch['positions'].size()
-    node_mask = minibatch['atom_mask'].unsqueeze(2)
+    node_mask = minibatch['atom_mask'].unsqueeze(2)  # [batch_size, n_nodes, 1]
     context_node_nf = 0
     context_list = []
     for key in conditioning:
@@ -64,7 +64,7 @@ def prepare_context(conditioning, minibatch, property_norms):
         if len(properties.size()) == 1:
             # Global feature.
             assert properties.size() == (batch_size,)
-            reshaped = properties.view(batch_size, 1, 1).repeat(1, n_nodes, 1)
+            reshaped = properties.view(batch_size, 1, 1).repeat(1, n_nodes, 1)  # [batch_size, n_nodes, 1] with scalar repeated over dims
             context_list.append(reshaped)
             context_node_nf += 1
         elif len(properties.size()) == 2 or len(properties.size()) == 3:
@@ -82,9 +82,9 @@ def prepare_context(conditioning, minibatch, property_norms):
         else:
             raise ValueError('Invalid tensor size, more than 3 axes.')
     # Concatenate
-    context = torch.cat(context_list, dim=2)
+    context = torch.cat(context_list, dim=2)  # [batch_size, n_nodes, context_node_nf]
     # Mask disabled nodes!
     context = context * node_mask
-    assert context.size(2) == context_node_nf
-    return context
+    assert context.size(2) == context_node_nf  # sum of all prop dims
+    return context  # just from dummy_data?
 

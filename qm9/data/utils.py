@@ -20,7 +20,7 @@ def initialize_datasets(args, datadir, dataset, subset=None, splits=None,
     args : dict
         Dictionary of input arguments detailing the cormorant calculation.
     datadir : str
-        Path to the directory where the data and calculations and is, or will be, stored.
+        Path to the directory where the data and calculations is, or will be, stored.
     dataset : str
         String specification of the dataset.  If it is not already downloaded, must currently by "qm9" or "md17".
     subset : str, optional
@@ -53,11 +53,11 @@ def initialize_datasets(args, datadir, dataset, subset=None, splits=None,
     """
     # Set the number of points based upon the arguments
     num_pts = {'train': args.num_train,
-               'test': args.num_test, 'valid': args.num_valid}
+               'test': args.num_test, 'valid': args.num_valid}  # defaults to -1 for all the dataset(s)
 
     # Download and process dataset. Returns datafiles.
     datafiles = prepare_dataset(
-        datadir, 'qm9', subset, splits, force_download=force_download)
+        datadir, 'qm9', subset, splits, force_download=force_download)  # subset, splits are both None
 
     # Load downloaded/processed datasets
     datasets = {}

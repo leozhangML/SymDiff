@@ -162,7 +162,7 @@ class EGNN(nn.Module):
         self.normalization_factor = normalization_factor
         self.aggregation_method = aggregation_method
 
-        if sin_embedding:
+        if sin_embedding:  # not used 
             self.sin_embedding = SinusoidsEmbeddingNew()
             edge_feat_nf = self.sin_embedding.dim * 2
         else:

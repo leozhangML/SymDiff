@@ -72,8 +72,6 @@ def print_table(bonds_dict):
         print()
 
 
-# print_table(bonds3)
-
 
 def check_consistency_bond_dictionaries():
     for bonds_dict in [bonds1, bonds2, bonds3]:

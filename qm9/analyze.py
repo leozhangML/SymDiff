@@ -326,7 +326,7 @@ def analyze_stability_for_molecules(molecule_list, dataset_info):
     node_mask = molecule_list['node_mask']
 
     if isinstance(node_mask, torch.Tensor):
-        atomsxmol = torch.sum(node_mask, dim=1)
+        atomsxmol = torch.sum(node_mask, dim=1)  # num of atoms for each point
     else:
         atomsxmol = [torch.sum(m) for m in node_mask]
 
@@ -365,7 +365,6 @@ def analyze_stability_for_molecules(molecule_list, dataset_info):
     if use_rdkit:
         metrics = BasicMolecularMetrics(dataset_info)
         rdkit_metrics = metrics.evaluate(processed_list)
-        #print("Unique molecules:", rdkit_metrics[1])
         return validity_dict, rdkit_metrics
     else:
         return validity_dict, None

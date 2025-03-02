@@ -1,8 +1,10 @@
 # Rdkit import should be first, do not move it
 try:
     from rdkit import Chem
+    print("RDKit found and imported")
 except ModuleNotFoundError:
-    pass
+    print("RDKit not found, please install it")
+
 import copy
 import utils
 import argparse
@@ -10,7 +12,7 @@ import wandb
 from configs.datasets_config import get_dataset_info
 from os.path import join
 from qm9 import dataset
-from qm9.models import get_optim, get_model
+from qm9.models import get_optim, get_scheduler, get_model
 from equivariant_diffusion import en_diffusion
 from equivariant_diffusion.utils import assert_correctly_masked
 from equivariant_diffusion import utils as flow_utils
@@ -19,6 +21,7 @@ import time
 import pickle
 from qm9.utils import prepare_context, compute_mean_mad
 from train_test import train_epoch, test, analyze_and_save
+
 
 parser = argparse.ArgumentParser(description='E3Diffusion')
 parser.add_argument('--exp_name', type=str, default='debug_10')
@@ -37,9 +40,20 @@ parser.add_argument('--diffusion_noise_precision', type=float, default=1e-5,
 parser.add_argument('--diffusion_loss_type', type=str, default='l2',
                     help='vlb, l2')
 
+# Other args
 parser.add_argument('--n_epochs', type=int, default=200)
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--lr', type=float, default=2e-4)
+parser.add_argument('--use_amsgrad', action="store_true")  # default from EDM
+parser.add_argument('--weight_decay', type=float, default=1e-12)  # default from EDM
+
+parser.add_argument('--scheduler', type=str, default=None)  # default from EDM
+parser.add_argument('--num_warmup_steps', type=int, default=30000)  # default from EDM
+parser.add_argument('--num_training_steps', type=int, default=350000)  # default from EDM
+
+parser.add_argument('--clipping_type', type=str, default="queue")  # default from EDM
+parser.add_argument('--max_grad_norm', type=float, default=1.5)  # NOTE: LEO
+
 parser.add_argument('--brute_force', type=eval, default=False,
                     help='True | False')
 parser.add_argument('--actnorm', type=eval, default=True,
@@ -54,6 +68,7 @@ parser.add_argument('--clip_grad', type=eval, default=True,
                     help='True | False')
 parser.add_argument('--trace', type=str, default='hutch',
                     help='hutch | exact')
+
 # EGNN args -->
 parser.add_argument('--n_layers', type=int, default=6,
                     help='number of layers')
@@ -70,11 +85,13 @@ parser.add_argument('--norm_constant', type=float, default=1,
 parser.add_argument('--sin_embedding', type=eval, default=False,
                     help='whether using or not the sin embedding')
 # <-- EGNN args
+
 parser.add_argument('--ode_regularization', type=float, default=1e-3)
 parser.add_argument('--dataset', type=str, default='qm9',
                     help='qm9 | qm9_second_half (train only on the last 50K samples of the training dataset)')
 parser.add_argument('--datadir', type=str, default='qm9/temp',
                     help='qm9 directory')
+parser.add_argument('--force_download', type=bool, default=False, help='Whether to redownload qm9')  # LEO
 parser.add_argument('--filter_n_atoms', type=int, default=None,
                     help='When set to an integer value, QM9 will only contain molecules of that amount of atoms')
 parser.add_argument('--dequantization', type=str, default='argmax_variational',
@@ -115,20 +132,47 @@ parser.add_argument('--normalization_factor', type=float, default=1,
                     help="Normalize the sum aggregation of EGNN")
 parser.add_argument('--aggregation_method', type=str, default='sum',
                     help='"sum" or "mean"')
+
+# -------- sym_diff args -------- #
+parser.add_argument("--xh_hidden_size", type=int, default=128, help="config for DDG")
+parser.add_argument("--K", type=int, default=128, help="config for DDG")
+
+parser.add_argument("--enc_hidden_size", type=int, default=64, help="config for DDG")
+parser.add_argument("--enc_depth", type=int, default=4, help="config for DDG")
+parser.add_argument("--enc_num_heads", type=int, default=4, help="config for DDG")
+parser.add_argument("--enc_mlp_ratio", type=float, default=4, help="config for DDG")
+
+parser.add_argument("--dec_hidden_features", type=int, default=32, help="config for DDG")
+
+parser.add_argument("--hidden_size", type=int, default=256, help="config for DDG")
+parser.add_argument("--depth", type=int, default=6, help="config for DDG")
+parser.add_argument("--num_heads", type=int, default=4, help="config for DDG")
+parser.add_argument("--mlp_ratio", type=float, default=2.0, help="config for DDG")
+parser.add_argument("--mlp_dropout", type=float, default=0.0, help="config for DDG")
+
+parser.add_argument("--enc_concat_h", action="store_true", help="config for DDG")
+
+parser.add_argument("--noise_dims", type=int, default=16, help="config for DDG")
+parser.add_argument("--noise_std", type=float, default=1.0, help="config for DDG")
+
+parser.add_argument("--mlp_type", type=str, default="swiglu", help="config for DDG")
+
+parser.add_argument("--fix_qr", action="store_true", help="Whether to change the use of QR")
+
+
+# Getting the dataset
 args = parser.parse_args()
+args.n_dims = 3
 
-dataset_info = get_dataset_info(args.dataset, args.remove_h)
-
+dataset_info = get_dataset_info(args.dataset, args.remove_h)  # get configs for qm9 etc.
 atom_encoder = dataset_info['atom_encoder']
 atom_decoder = dataset_info['atom_decoder']
-
-# args, unparsed_args = parser.parse_known_args()
-args.wandb_usr = utils.get_wandb_username(args.wandb_usr)
 
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 device = torch.device("cuda" if args.cuda else "cpu")
 dtype = torch.float32
 
+# If resuming, load the previous args and model
 if args.resume is not None:
     exp_name = args.exp_name + '_resume'
     start_epoch = args.start_epoch
@@ -137,13 +181,13 @@ if args.resume is not None:
     normalization_factor = args.normalization_factor
     aggregation_method = args.aggregation_method
 
-    with open(join(args.resume, 'args.pickle'), 'rb') as f:
+    with open(join('outputs', args.resume, 'args.pickle'), 'rb') as f:
         args = pickle.load(f)
 
     args.resume = resume
     args.break_train_epoch = False
 
-    args.exp_name = exp_name
+    args.exp_name = exp_name  # new exp_name
     args.start_epoch = start_epoch
     args.wandb_usr = wandb_usr
 
@@ -156,46 +200,44 @@ if args.resume is not None:
     print(args)
 
 utils.create_folders(args)
-# print(args)
-
 
 # Wandb config
 if args.no_wandb:
     mode = 'disabled'
 else:
     mode = 'online' if args.online else 'offline'
-kwargs = {'entity': args.wandb_usr, 'name': args.exp_name, 'project': 'e3_diffusion', 'config': args,
+kwargs = {'name': args.exp_name, 'project': 'e3_diffusion', 'config': args,
           'settings': wandb.Settings(_disable_stats=True), 'reinit': True, 'mode': mode}
 wandb.init(**kwargs)
 wandb.save('*.txt')
 
 # Retrieve QM9 dataloaders
 dataloaders, charge_scale = dataset.retrieve_dataloaders(args)
-
 data_dummy = next(iter(dataloaders['train']))
 
-
+# Note: We do not use conditioning for our experiments
 if len(args.conditioning) > 0:
     print(f'Conditioning on {args.conditioning}')
-    property_norms = compute_mean_mad(dataloaders, args.conditioning, args.dataset)
-    context_dummy = prepare_context(args.conditioning, data_dummy, property_norms)
-    context_node_nf = context_dummy.size(2)
+    property_norms = compute_mean_mad(dataloaders, args.conditioning, args.dataset)  # compute mean, mad of each prop
+    context_dummy = prepare_context(args.conditioning, data_dummy, property_norms)  # combines conditioning info into tensor
+    context_node_nf = context_dummy.size(2)  # this is combined dim of all conditioning props
 else:
     context_node_nf = 0
     property_norms = None
 
 args.context_node_nf = context_node_nf
 
-
 # Create EGNN flow
+# vdm (with net), DistributionNodes (sample to get num of nodes), DistributionProperty (if conditioning)
+# note that nodes_dist.sample is not filtered
 model, nodes_dist, prop_dist = get_model(args, device, dataset_info, dataloaders['train'])
-if prop_dist is not None:
+if prop_dist is not None:  # if conditioning
     prop_dist.set_normalizer(property_norms)
 model = model.to(device)
 optim = get_optim(args, model)
-# print(model)
+scheduler = get_scheduler(args, optim)
 
-gradnorm_queue = utils.Queue()
+gradnorm_queue = utils.Queue()  # stores grad norms for clipping within some std of past grads
 gradnorm_queue.add(3000)  # Add large value that will be flushed.
 
 
@@ -207,10 +249,13 @@ def check_mask_correct(variables, node_mask):
 
 def main():
     if args.resume is not None:
-        flow_state_dict = torch.load(join(args.resume, 'flow.npy'))
-        optim_state_dict = torch.load(join(args.resume, 'optim.npy'))
+        flow_state_dict = torch.load(join('outputs', args.resume, 'generative_model.npy'))  # for vdm
+        optim_state_dict = torch.load(join('outputs', args.resume, 'optim.npy'))
         model.load_state_dict(flow_state_dict)
         optim.load_state_dict(optim_state_dict)
+        if args.scheduler is not None:
+            scheduler_state_dict = torch.load(join('outputs', args.resume, 'scheduler.npy'))
+            scheduler.load_state_dict(scheduler_state_dict)
 
     # Initialize dataparallel if enabled and possible.
     if args.dp and torch.cuda.device_count() > 1:
@@ -220,38 +265,53 @@ def main():
     else:
         model_dp = model
 
-    # Initialize model copy for exponential moving average of params.
+    # Create EMA either for both models or separate for gamma and K
     if args.ema_decay > 0:
         model_ema = copy.deepcopy(model)
         ema = flow_utils.EMA(args.ema_decay)
 
+        # NOTE: LEO
+        if args.resume is not None:
+            ema_state_dict = torch.load(join('outputs', args.resume, 'generative_model_ema.npy'))
+            model_ema.load_state_dict(ema_state_dict)
+
         if args.dp and torch.cuda.device_count() > 1:
-            model_ema_dp = torch.nn.DataParallel(model_ema)
+            model_ema_dp = torch.nn.DataParallel(model_ema)  # used just for test
         else:
             model_ema_dp = model_ema
+
     else:
         ema = None
         model_ema = model
-        model_ema_dp = model_dp
+        model_ema_dp = model_dp  # how is this used?                
 
     best_nll_val = 1e8
     best_nll_test = 1e8
+
     for epoch in range(args.start_epoch, args.n_epochs):
+        wandb.log({"Epoch": epoch}, commit=True)
+        print(f"--- Epoch {epoch} ---")
+
         start_epoch = time.time()
         train_epoch(args=args, loader=dataloaders['train'], epoch=epoch, model=model, model_dp=model_dp,
                     model_ema=model_ema, ema=ema, device=device, dtype=dtype, property_norms=property_norms,
                     nodes_dist=nodes_dist, dataset_info=dataset_info,
-                    gradnorm_queue=gradnorm_queue, optim=optim, prop_dist=prop_dist)
+                    gradnorm_queue=gradnorm_queue, optim=optim, scheduler=scheduler, prop_dist=prop_dist)
         print(f"Epoch took {time.time() - start_epoch:.1f} seconds.")
 
-        if epoch % args.test_epochs == 0:
+        if epoch % args.test_epochs == 0 and epoch != args.start_epoch:
             if isinstance(model, en_diffusion.EnVariationalDiffusion):
-                wandb.log(model.log_info(), commit=True)
+                wandb.log(model.log_info(), commit=True)  # should be constant for l2
 
-            if not args.break_train_epoch:
-                analyze_and_save(args=args, epoch=epoch, model_sample=model_ema, nodes_dist=nodes_dist,
-                                 dataset_info=dataset_info, device=device,
-                                 prop_dist=prop_dist, n_samples=args.n_stability_samples)
+            if not args.break_train_epoch:  # for evals
+                # Samples n_stability_samples points and logs atm_stable, 
+                # mol_stable, validity, uniqueness and novelty
+                validity_dict = analyze_and_save(
+                    args=args, epoch=epoch, model_sample=model_ema, nodes_dist=nodes_dist,
+                    dataset_info=dataset_info, device=device,
+                    prop_dist=prop_dist, n_samples=args.n_stability_samples)
+
+            # Compute average nll over the val/test set
             nll_val = test(args=args, loader=dataloaders['valid'], epoch=epoch, eval_model=model_ema_dp,
                            partition='Val', device=device, dtype=dtype, nodes_dist=nodes_dist,
                            property_norms=property_norms)
@@ -259,25 +319,22 @@ def main():
                             partition='Test', device=device, dtype=dtype,
                             nodes_dist=nodes_dist, property_norms=property_norms)
 
-            if nll_val < best_nll_val:
+            # Save best model
+            if nll_val < best_nll_val: 
                 best_nll_val = nll_val
                 best_nll_test = nll_test
+
                 if args.save_model:
                     args.current_epoch = epoch + 1
                     utils.save_model(optim, 'outputs/%s/optim.npy' % args.exp_name)
                     utils.save_model(model, 'outputs/%s/generative_model.npy' % args.exp_name)
+                    if scheduler is not None:
+                        utils.save_model(scheduler, 'outputs/%s/scheduler.npy' % args.exp_name)
                     if args.ema_decay > 0:
-                        utils.save_model(model_ema, 'outputs/%s/generative_model_ema.npy' % args.exp_name)
+                        utils.save_model(model_ema, 'outputs/%s/generative_model_ema.npy' % args.exp_name)                       
                     with open('outputs/%s/args.pickle' % args.exp_name, 'wb') as f:
                         pickle.dump(args, f)
 
-                if args.save_model:
-                    utils.save_model(optim, 'outputs/%s/optim_%d.npy' % (args.exp_name, epoch))
-                    utils.save_model(model, 'outputs/%s/generative_model_%d.npy' % (args.exp_name, epoch))
-                    if args.ema_decay > 0:
-                        utils.save_model(model_ema, 'outputs/%s/generative_model_ema_%d.npy' % (args.exp_name, epoch))
-                    with open('outputs/%s/args_%d.pickle' % (args.exp_name, epoch), 'wb') as f:
-                        pickle.dump(args, f)
             print('Val loss: %.4f \t Test loss:  %.4f' % (nll_val, nll_test))
             print('Best val loss: %.4f \t Best test loss:  %.4f' % (best_nll_val, best_nll_test))
             wandb.log({"Val loss ": nll_val}, commit=True)

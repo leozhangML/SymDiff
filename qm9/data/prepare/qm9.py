@@ -40,6 +40,7 @@ def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, 
         splits = gen_splits_gdb9(gdb9dir, cleanup)
 
     # Process GDB9 dataset, and return dictionary of splits
+    print("GDB9")
     gdb9_data = {}
     for split, split_idx in splits.items():
         gdb9_data[split] = process_xyz_files(
@@ -56,11 +57,13 @@ def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, 
 
     # Save processed GDB9 data into train/validation/test splits
     logging.info('Saving processed data:')
+    print('Saving processed data:')
     for split, data in gdb9_data.items():
         savedir = join(gdb9dir, split+'.npz')
         np.savez_compressed(savedir, **data)
 
     logging.info('Processing/saving complete!')
+    print('Processing/saving complete!')
 
 
 def gen_splits_gdb9(gdb9dir, cleanup=True):
@@ -213,7 +216,7 @@ def get_unique_charges(charges):
     Get count of each charge for each molecule.
     """
     # Create a dictionary of charges
-    charge_counts = {z: np.zeros(len(charges), dtype=np.int)
+    charge_counts = {z: np.zeros(len(charges), dtype=np.int32)  # from np.int deprecated
                      for z in np.unique(charges)}
     print(charge_counts.keys())
 
